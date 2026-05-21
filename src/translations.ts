@@ -234,6 +234,14 @@ const translationsMap: Record<string, ModalTranslations> = {
     ariaLabelModal: "Верификација Didit",
     ariaLabelClose: "Затвори верификација"
   },
+  mn: {
+    exitTitle: "Баталгаажуулалтаас гарах уу?",
+    exitMessage: "Гарвал таны баталгаажуулалтын процесс дуусна. Та итгэлтэй байна уу?",
+    continueButton: "Үргэлжлүүлэх",
+    exitButton: "Гарах",
+    ariaLabelModal: "Didit баталгаажуулалт",
+    ariaLabelClose: "Баталгаажуулалтыг хаах"
+  },
   ms: {
     exitTitle: "Keluar dari pengesahan?",
     exitMessage: "Keluar akan menamatkan proses pengesahan anda. Adakah anda pasti?",

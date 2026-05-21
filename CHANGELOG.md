@@ -2,6 +2,11 @@
 
 All notable changes to `@didit-protocol/sdk-web` will be documented in this file.
 
+## [0.2.1] - 2026-05-21
+
+### Added
+- Mongolian (`mn`) language support for the modal UI.
+
 ## [0.2.0] - 2026-04-30
 
 ### Added
