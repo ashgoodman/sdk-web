@@ -183,6 +183,27 @@ describe("mapTransactionResponse", () => {
       mapTransactionResponse({ uuid: "x", status: "S", action_required: { url: "https://x" } }).actionRequired
     ).toBeUndefined();
   });
+
+  it("throws instead of fabricating an empty transactionId when uuid/transaction_id is missing", () => {
+    expect(() => mapTransactionResponse({ status: "APPROVED" })).toThrow(DiditTransactionError);
+    try {
+      mapTransactionResponse({ status: "APPROVED" });
+      throw new Error("expected mapTransactionResponse to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(DiditTransactionError);
+      expect((error as DiditTransactionError).type).toBe("network");
+    }
+  });
+
+  it("throws instead of fabricating an empty status when status is missing", () => {
+    // A missing status must not silently satisfy the poll's statusMoved early-exit
+    // (an empty string differing from a real initialStatus would look like progress).
+    expect(() => mapTransactionResponse({ uuid: "id-1" })).toThrow(DiditTransactionError);
+  });
+
+  it("does not throw when both uuid/transaction_id and status are present", () => {
+    expect(() => mapTransactionResponse({ uuid: "id-1", status: "APPROVED" })).not.toThrow();
+  });
 });
 
 describe("classifyTransactionError", () => {
@@ -315,6 +336,86 @@ describe("pollTransactionAfterAction", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result).toBeNull();
+  });
+
+  it("aborts immediately on a terminal invalid_token error instead of exhausting maxAttempts", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 401, json: async () => ({ detail: "Invalid token." }) } as Response);
+
+    await expect(
+      pollTransactionAfterAction({
+        baseUrl: "https://verification.didit.me",
+        transactionToken: "tok",
+        transactionId: "id-1",
+        intervalMs: 1,
+        maxAttempts: 10
+      })
+    ).rejects.toMatchObject({ name: "DiditTransactionError", type: "invalid_token" });
+
+    // A maxUses/expired token can never succeed on retry, and each GET consumes a
+    // use server-side: retrying it would just burn the token's remaining uses.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts immediately on a terminal expired_token error instead of exhausting maxAttempts", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ detail: "Transaction token expired." })
+    } as Response);
+
+    await expect(
+      pollTransactionAfterAction({
+        baseUrl: "https://verification.didit.me",
+        transactionToken: "tok",
+        transactionId: "id-1",
+        intervalMs: 1,
+        maxAttempts: 10
+      })
+    ).rejects.toMatchObject({ name: "DiditTransactionError", type: "expired_token" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retrying on a non-terminal error type such as validation", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ detail: "Bad request." })
+    } as Response);
+
+    const result = await pollTransactionAfterAction({
+      baseUrl: "https://verification.didit.me",
+      transactionToken: "tok",
+      transactionId: "id-1",
+      intervalMs: 1,
+      maxAttempts: 3
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result).toBeNull();
+  });
+
+  it("stops making requests once isAborted() reports true", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        uuid: "id-1",
+        status: "AWAITING_USER",
+        action_required: { type: "wallet_ownership", url: "https://verification.didit.me/wallet-ownership/t" }
+      })
+    );
+
+    const result = await pollTransactionAfterAction({
+      baseUrl: "https://verification.didit.me",
+      transactionToken: "tok",
+      transactionId: "id-1",
+      initialStatus: "AWAITING_USER",
+      intervalMs: 1,
+      maxAttempts: 10,
+      isAborted: () => fetchMock.mock.calls.length >= 2
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result?.status).toBe("AWAITING_USER");
   });
 });
 

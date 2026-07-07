@@ -211,7 +211,30 @@ export interface SubmitTransactionResult {
   actionRequired?: TransactionActionRequired;
 }
 
-export type TransactionActionCompletedCallback = (result: SubmitTransactionResult) => void;
+/**
+ * Signal delivered alongside a stale/pre-action `result` when the
+ * post-action refresh could not complete (e.g. the transaction token became
+ * invalid or expired while the user was in the action flow). `type` mirrors
+ * {@link TransactionErrorType}; terminal auth failures (`invalid_token`,
+ * `expired_token`) are the only cases currently reported here.
+ */
+export interface TransactionActionCompletedError {
+  type: TransactionErrorType;
+  message: string;
+}
+
+/**
+ * Called after an auto-launched transaction action flow completes or its
+ * modal is closed. `result` is the refreshed transaction, or the original
+ * pre-action result when the refresh could not complete - in which case
+ * `error` is set so integrators can distinguish "refresh failed" from "the
+ * action genuinely left the transaction unchanged". The `error` parameter
+ * is additive: existing single-argument callbacks keep working unchanged.
+ */
+export type TransactionActionCompletedCallback = (
+  result: SubmitTransactionResult,
+  error?: TransactionActionCompletedError
+) => void;
 
 export interface SubmitTransactionOptions {
   /** Short-lived transaction token minted by your backend via POST /v3/transactions/sdk-token/. */

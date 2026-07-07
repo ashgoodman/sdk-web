@@ -24,6 +24,7 @@ export type {
   TransactionActionType,
   TransactionActionRequired,
   TransactionActionCompletedCallback,
+  TransactionActionCompletedError,
   TransactionErrorType,
   SubmitTransactionOptions,
   SubmitTransactionResult

@@ -172,10 +172,20 @@ function mapTravelRuleStatus(raw: Record<string, unknown>): string | undefined {
 }
 
 export function mapTransactionResponse(raw: Record<string, unknown>): SubmitTransactionResult {
-  const result: SubmitTransactionResult = {
-    transactionId: pickString(raw, "uuid", "transaction_id", "transactionId") ?? "",
-    status: pickString(raw, "status") ?? ""
-  };
+  const transactionId = pickString(raw, "uuid", "transaction_id", "transactionId");
+  const status = pickString(raw, "status");
+  if (!transactionId || !status) {
+    // A missing id/status is not a valid transaction snapshot: fabricating
+    // empty strings here would let a malformed response (envelope,
+    // intercepting proxy, contract drift) look like a real result to
+    // callers - e.g. the poll's statusMoved early-exit would trigger on an
+    // empty status that merely differs from a real initialStatus.
+    throw new DiditTransactionError(
+      "network",
+      "Unexpected response shape from the Didit API: missing transaction id or status."
+    );
+  }
+  const result: SubmitTransactionResult = { transactionId, status };
   const travelRuleStatus = mapTravelRuleStatus(raw);
   if (travelRuleStatus) result.travelRuleStatus = travelRuleStatus;
   const actionRequired = mapActionRequired(raw.action_required ?? raw.actionRequired);
@@ -275,12 +285,27 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Terminal auth failures that will never succeed on retry: keep polling would just burn the token's remaining uses. */
+function isTerminalPollError(error: unknown): error is DiditTransactionError {
+  return error instanceof DiditTransactionError && (error.type === "invalid_token" || error.type === "expired_token");
+}
+
 /**
  * Re-fetches the transaction after an action flow finished or its modal was
  * closed. Polls with a bounded retry (never relies on a single event/attempt)
  * and stops early once the required action is cleared or the status moved on.
  * Returns the latest successfully fetched result, or null when every attempt
  * failed.
+ *
+ * A terminal auth failure (invalid_token/expired_token - e.g. a maxUses
+ * token exhausted by the poll's own GETs, or the token TTL elapsing while
+ * the user was in the action flow) aborts immediately instead of retrying:
+ * it can never succeed, and each attempt would otherwise still count
+ * against the token's use_count server-side. The error is rethrown so the
+ * caller can surface it instead of silently returning a stale result.
+ *
+ * `isAborted` is polled between attempts so a caller that tears down (e.g.
+ * DiditSdk.destroy()) can stop the loop from making further network calls.
  */
 export async function pollTransactionAfterAction(
   args: TransactionRequestArgs & {
@@ -288,6 +313,7 @@ export async function pollTransactionAfterAction(
     initialStatus?: string;
     intervalMs?: number;
     maxAttempts?: number;
+    isAborted?: () => boolean;
   }
 ): Promise<SubmitTransactionResult | null> {
   const intervalMs = args.intervalMs ?? ACTION_POLL_INTERVAL_MS;
@@ -295,9 +321,11 @@ export async function pollTransactionAfterAction(
   let latest: SubmitTransactionResult | null = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (args.isAborted?.()) return latest;
     if (attempt > 0) {
       await delay(intervalMs);
     }
+    if (args.isAborted?.()) return latest;
     try {
       latest = await fetchTransaction(args);
       const actionResolved = !latest.actionRequired;
@@ -305,7 +333,10 @@ export async function pollTransactionAfterAction(
       if (actionResolved || statusMoved) {
         return latest;
       }
-    } catch {
+    } catch (error) {
+      if (isTerminalPollError(error)) {
+        throw error;
+      }
       // Transient failure; keep polling until the bound is reached.
     }
   }
