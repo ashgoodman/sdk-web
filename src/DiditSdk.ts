@@ -78,10 +78,11 @@ export class DiditSdk {
   }
 
   /**
-   * True while a transaction's required-action modal (biometric session or
-   * wallet-ownership widget, auto-launched by submitTransaction) is on
-   * screen. Tracked separately from {@link isPresented}, which reflects the
-   * verification modal only.
+   * True while a transaction's wallet-ownership action modal (auto-launched
+   * by submitTransaction) is on screen. verification_session actions are
+   * never auto-launched, so they never affect this flag - see
+   * {@link submitTransaction}. Tracked separately from {@link isPresented},
+   * which reflects the verification modal only.
    */
   public get isActionModalPresented(): boolean {
     return this._actionModal?.isOpen() ?? false;
@@ -141,16 +142,23 @@ export class DiditSdk {
    * the SDK collects a didit-fp-v2 fingerprint and sends it as the X-Didit-PID /
    * X-Didit-FP-Hash headers plus a `fingerprint_v2` body field.
    *
-   * When the response contains an `actionRequired` block (a biometric
-   * verification session or a wallet-ownership widget) and `autoLaunchAction` is
-   * not false, the SDK opens the action URL in the verification modal. Once the
-   * flow completes or the modal is closed, the transaction is re-fetched with a
-   * bounded poll (never a single event) and `onActionCompleted` is invoked with
-   * the refreshed result.
+   * When the response contains an `actionRequired` block, the contract differs
+   * by type:
+   * - `wallet_ownership` (a same-origin, Didit-hosted widget): when
+   *   `autoLaunchAction` is not false, the SDK opens the action URL in the
+   *   verification modal itself. Once the flow completes or the modal is
+   *   closed, the transaction is re-fetched with a bounded poll (never a
+   *   single event) and `onActionCompleted` is invoked with the refreshed
+   *   result.
+   * - `verification_session` (a biometric verification session): never
+   *   auto-launched, regardless of `autoLaunchAction`. It is only ever
+   *   returned in `result.actionRequired` for the host application to launch
+   *   with its own verification integration (e.g. `startVerification`).
    *
    * @param options Submission options: transactionToken, transaction payload,
    * optional baseUrl (defaults to https://verification.didit.me),
-   * autoLaunchAction (defaults to true) and onActionCompleted callback.
+   * autoLaunchAction (defaults to true, applies to wallet_ownership actions
+   * only) and onActionCompleted callback.
    * @returns The created transaction: transactionId, status, travelRuleStatus
    * and actionRequired when a user action is pending.
    * @throws {DiditTransactionError} Typed as "invalid_token", "expired_token",
@@ -181,8 +189,12 @@ export class DiditSdk {
 
     SDKLogger.log("Transaction submitted:", result);
 
+    // Only wallet_ownership is a same-origin, Didit-hosted widget that is
+    // safe for the SDK to open on the integrator's behalf. verification_session
+    // is never auto-launched: it is already returned in result.actionRequired
+    // above for the host to launch with its own verification integration.
     const autoLaunchAction = options.autoLaunchAction ?? true;
-    if (autoLaunchAction && result.actionRequired?.url) {
+    if (autoLaunchAction && result.actionRequired?.type === "wallet_ownership" && result.actionRequired.url) {
       void this.runTransactionAction(baseUrl, options.transactionToken, result, options.onActionCompleted);
     }
 

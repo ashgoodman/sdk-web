@@ -224,12 +224,14 @@ export interface TransactionActionCompletedError {
 }
 
 /**
- * Called after an auto-launched transaction action flow completes or its
- * modal is closed. `result` is the refreshed transaction, or the original
+ * Called after an auto-launched `wallet_ownership` action flow completes or
+ * its modal is closed. `result` is the refreshed transaction, or the original
  * pre-action result when the refresh could not complete - in which case
  * `error` is set so integrators can distinguish "refresh failed" from "the
  * action genuinely left the transaction unchanged". The `error` parameter
  * is additive: existing single-argument callbacks keep working unchanged.
+ * Never invoked for a `verification_session` action, since that type is
+ * never auto-launched.
  */
 export type TransactionActionCompletedCallback = (
   result: SubmitTransactionResult,
@@ -243,14 +245,19 @@ export interface SubmitTransactionOptions {
   baseUrl?: string;
   transaction: DiditTransactionPayload;
   /**
-   * Automatically open the verification modal when the response contains an
-   * actionRequired block.
+   * Automatically open the verification modal when the response contains a
+   * `wallet_ownership` actionRequired block. Has no effect on a
+   * `verification_session` action, which is never auto-launched and is
+   * always returned in the result's `actionRequired` for the host to launch
+   * with its own verification integration.
    * @default true
    */
   autoLaunchAction?: boolean;
   /**
-   * Called with the refreshed transaction after the auto-launched action flow
-   * completes or its modal is closed.
+   * Called with the refreshed transaction after an auto-launched
+   * `wallet_ownership` action flow completes or its modal is closed. Not
+   * invoked for `verification_session` actions, since those are never
+   * auto-launched.
    */
   onActionCompleted?: TransactionActionCompletedCallback;
 }

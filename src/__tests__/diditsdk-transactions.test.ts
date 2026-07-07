@@ -58,16 +58,19 @@ const payload: DiditTransactionPayload = {
   subject: { externalUserId: "u1" }
 };
 
+// wallet_ownership is the only action type the SDK auto-launches (it is a
+// same-origin, Didit-hosted widget). verification_session actions have their
+// own dedicated tests below asserting they are never auto-launched.
 const submitResponseBody = {
   uuid: "txn-uuid-1",
   status: "AWAITING_USER",
-  action_required: { type: "verification_session", url: "https://verify.didit.me/s/1" }
+  action_required: { type: "wallet_ownership", url: "https://verify.didit.me/wallet-ownership/1" }
 };
 
 const submitResultWithAction: SubmitTransactionResult = {
   transactionId: "txn-uuid-1",
   status: "AWAITING_USER",
-  actionRequired: { type: "verification_session", url: "https://verify.didit.me/s/1" }
+  actionRequired: { type: "wallet_ownership", url: "https://verify.didit.me/wallet-ownership/1" }
 };
 
 describe("DiditSdk transaction action lifecycle", () => {
@@ -223,5 +226,98 @@ describe("DiditSdk transaction action lifecycle", () => {
     sdk.close();
 
     expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ type: "cancelled" }));
+  });
+});
+
+describe("DiditSdk transaction action auto-launch contract (wallet_ownership vs verification_session)", () => {
+  let sdk: DiditSdk;
+  let fetchMock: jest.Mock<typeof fetch>;
+
+  function mockSubmitResponse(actionRequired: { type: string; url: string }): void {
+    fetchMock.mockImplementation((_url, init) => {
+      if ((init as RequestInit | undefined)?.method === "POST") {
+        return Promise.resolve(
+          jsonResponse({ uuid: "txn-uuid-2", status: "AWAITING_USER", action_required: actionRequired })
+        );
+      }
+      return Promise.resolve(jsonResponse({ uuid: "txn-uuid-2", status: "APPROVED" }));
+    });
+  }
+
+  beforeEach(() => {
+    resetDeviceFingerprintForTesting();
+    fetchMock = jest.fn<typeof fetch>();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    DiditSdk.shared.destroy();
+    sdk = DiditSdk.shared;
+  });
+
+  afterEach(() => {
+    sdk.destroy();
+    jest.restoreAllMocks();
+    // @ts-expect-error cleanup of the test-injected global
+    delete globalThis.fetch;
+    resetDeviceFingerprintForTesting();
+  });
+
+  it("does not auto-launch a verification_session action: no modal, no poll, result carries actionRequired for the host to handle", async () => {
+    mockSubmitResponse({ type: "verification_session", url: "https://verify.didit.me/s/1" });
+    const onActionCompleted = jest.fn();
+
+    const result = await sdk.submitTransaction({
+      transactionToken: "tok",
+      transaction: payload,
+      onActionCompleted
+    });
+    await flush();
+
+    expect(result).toEqual({
+      transactionId: "txn-uuid-2",
+      status: "AWAITING_USER",
+      actionRequired: { type: "verification_session", url: "https://verify.didit.me/s/1" }
+    });
+    expect(sdk.isActionModalPresented).toBe(false);
+    expect(sdk.isPresented).toBe(false);
+    // Only the initial submit POST happened - no follow-up poll GET.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onActionCompleted).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-launch a verification_session action even when autoLaunchAction is left at its default (true)", async () => {
+    mockSubmitResponse({ type: "verification_session", url: "https://verify.didit.me/s/2" });
+
+    await sdk.submitTransaction({ transactionToken: "tok", transaction: payload, autoLaunchAction: true });
+    await flush();
+
+    expect(sdk.isActionModalPresented).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still auto-launches a wallet_ownership action: opens the modal, polls after completion, and fires onActionCompleted", async () => {
+    mockSubmitResponse({ type: "wallet_ownership", url: "https://verify.didit.me/wallet-ownership/2" });
+    const onActionCompleted = jest.fn();
+
+    const result = await sdk.submitTransaction({
+      transactionToken: "tok",
+      transaction: payload,
+      onActionCompleted
+    });
+    await flush();
+
+    expect(result.actionRequired).toEqual({
+      type: "wallet_ownership",
+      url: "https://verify.didit.me/wallet-ownership/2"
+    });
+    expect(sdk.isActionModalPresented).toBe(true);
+
+    completeActionModal(sdk);
+    await flush();
+
+    expect(sdk.isActionModalPresented).toBe(false);
+    // The initial submit POST plus the post-action poll GET.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onActionCompleted).toHaveBeenCalledTimes(1);
+    expect(onActionCompleted).toHaveBeenCalledWith({ transactionId: "txn-uuid-2", status: "APPROVED" }, undefined);
   });
 });
