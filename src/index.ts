@@ -15,8 +15,20 @@ export type {
   VerificationEvent,
   VerificationCallback,
   StateChangeCallback,
-  EventCallback
+  EventCallback,
+  DiditTransactionPayload,
+  DiditTransactionDetails,
+  DiditTransactionParticipant,
+  DiditTransactionPaymentMethod,
+  DiditTravelRuleDetails,
+  TransactionActionType,
+  TransactionActionRequired,
+  TransactionActionCompletedCallback,
+  TransactionErrorType,
+  SubmitTransactionOptions,
+  SubmitTransactionResult
 } from "./types";
+export { DiditTransactionError, DEFAULT_TRANSACTION_BASE_URL } from "./transactions";
 export { SDK_VERSION } from "./constants";
 
 export { DiditSdk as default } from "./DiditSdk";

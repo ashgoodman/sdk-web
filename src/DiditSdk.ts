@@ -8,12 +8,23 @@ import type {
   VerificationEvent,
   SessionData,
   VerificationStatus,
-  StartVerificationOptions
+  StartVerificationOptions,
+  SubmitTransactionOptions,
+  SubmitTransactionResult,
+  TransactionActionCompletedCallback
 } from "./types";
 
 import { VerificationModal } from "./modal";
 import { DEFAULT_CONFIG } from "./constants";
 import { SDKLogger, createVerificationError } from "./utils";
+import {
+  DEFAULT_TRANSACTION_BASE_URL,
+  DiditTransactionError,
+  pollTransactionAfterAction,
+  submitTransactionRequest
+} from "./transactions";
+
+type TransactionActionOutcome = "finished" | "aborted";
 
 export class DiditSdk {
   private static _instance: DiditSdk | null = null;
@@ -38,6 +49,8 @@ export class DiditSdk {
   private _url: string | undefined;
   private _modal: VerificationModal | null = null;
   private _errorMessage: string | undefined;
+  private _actionModal: VerificationModal | null = null;
+  private _actionModalSettle: ((outcome: TransactionActionOutcome) => void) | null = null;
 
   public onComplete: VerificationCallback | undefined;
   public onStateChange: StateChangeCallback | undefined;
@@ -52,7 +65,7 @@ export class DiditSdk {
   }
 
   public get isPresented(): boolean {
-    return this._modal?.isOpen() ?? false;
+    return (this._modal?.isOpen() ?? false) || (this._actionModal?.isOpen() ?? false);
   }
 
   public get errorMessage(): string | undefined {
@@ -99,16 +112,141 @@ export class DiditSdk {
     }
   }
 
+  /**
+   * Submits a transaction (including travel-rule and crypto-monitoring payloads)
+   * directly from the end-user device.
+   *
+   * The request is authenticated with a short-lived transaction token minted by
+   * your backend (POST /v3/transactions/sdk-token/) and sent via the
+   * X-Transaction-Token header. Device intelligence is attached automatically:
+   * the SDK collects a didit-fp-v2 fingerprint and sends it as the X-Didit-PID /
+   * X-Didit-FP-Hash headers plus a `fingerprint_v2` body field.
+   *
+   * When the response contains an `actionRequired` block (a biometric
+   * verification session or a wallet-ownership widget) and `autoLaunchAction` is
+   * not false, the SDK opens the action URL in the verification modal. Once the
+   * flow completes or the modal is closed, the transaction is re-fetched with a
+   * bounded poll (never a single event) and `onActionCompleted` is invoked with
+   * the refreshed result.
+   *
+   * @param options Submission options: transactionToken, transaction payload,
+   * optional baseUrl (defaults to https://verification.didit.me),
+   * autoLaunchAction (defaults to true) and onActionCompleted callback.
+   * @returns The created transaction: transactionId, status, travelRuleStatus
+   * and actionRequired when a user action is pending.
+   * @throws {DiditTransactionError} Typed as "invalid_token", "expired_token",
+   * "validation" (with fieldErrors) or "network".
+   */
+  public async submitTransaction(options: SubmitTransactionOptions): Promise<SubmitTransactionResult> {
+    if (!options?.transactionToken || typeof options.transactionToken !== "string") {
+      throw new DiditTransactionError("invalid_token", "transactionToken is required.");
+    }
+    if (!options.transaction || typeof options.transaction !== "object") {
+      throw new DiditTransactionError("validation", "transaction payload is required.");
+    }
+    if (!options.transaction.txnId || typeof options.transaction.txnId !== "string") {
+      throw new DiditTransactionError("validation", "transaction.txnId is required.");
+    }
+    if (!options.transaction.details || typeof options.transaction.details !== "object") {
+      throw new DiditTransactionError("validation", "transaction.details is required.");
+    }
+
+    const baseUrl = (options.baseUrl ?? DEFAULT_TRANSACTION_BASE_URL).replace(/\/+$/, "");
+    SDKLogger.log("Submitting transaction:", options.transaction.txnId);
+
+    const result = await submitTransactionRequest({
+      baseUrl,
+      transactionToken: options.transactionToken,
+      transaction: options.transaction
+    });
+
+    SDKLogger.log("Transaction submitted:", result);
+
+    const autoLaunchAction = options.autoLaunchAction ?? true;
+    if (autoLaunchAction && result.actionRequired?.url) {
+      void this.runTransactionAction(baseUrl, options.transactionToken, result, options.onActionCompleted);
+    }
+
+    return result;
+  }
+
   public close(): void {
     SDKLogger.log("Closing verification programmatically");
+    if (this._actionModalSettle) {
+      this._actionModalSettle("finished");
+      return;
+    }
     this.handleModalCloseConfirmed();
   }
 
   public destroy(): void {
     SDKLogger.log("Destroying SDK instance");
+    this._actionModalSettle?.("aborted");
     this._modal?.destroy();
     this._modal = null;
     this.reset();
+  }
+
+  private async runTransactionAction(
+    baseUrl: string,
+    transactionToken: string,
+    submitResult: SubmitTransactionResult,
+    onActionCompleted: TransactionActionCompletedCallback | undefined
+  ): Promise<void> {
+    try {
+      const outcome = await this.presentTransactionActionModal(submitResult.actionRequired!.url);
+      if (outcome === "aborted") {
+        return;
+      }
+      if (!submitResult.transactionId) {
+        onActionCompleted?.(submitResult);
+        return;
+      }
+      const refreshed = await pollTransactionAfterAction({
+        baseUrl,
+        transactionToken,
+        transactionId: submitResult.transactionId,
+        initialStatus: submitResult.status
+      });
+      onActionCompleted?.(refreshed ?? submitResult);
+    } catch (error) {
+      SDKLogger.error("Transaction action follow-up failed:", error);
+      onActionCompleted?.(submitResult);
+    }
+  }
+
+  private presentTransactionActionModal(url: string): Promise<TransactionActionOutcome> {
+    // Abort any previous action modal before opening a new one.
+    this._actionModalSettle?.("aborted");
+
+    return new Promise<TransactionActionOutcome>((resolve) => {
+      let settled = false;
+      const settle = (outcome: TransactionActionOutcome): void => {
+        if (settled) return;
+        settled = true;
+        const modal = this._actionModal;
+        this._actionModal = null;
+        this._actionModalSettle = null;
+        modal?.destroy();
+        resolve(outcome);
+      };
+
+      this._actionModalSettle = settle;
+      this._actionModal = new VerificationModal(undefined, {
+        onClose: () => {},
+        onCloseConfirmed: () => settle("finished"),
+        onMessage: (event) => {
+          this.onEvent?.(event);
+          if (event.type === "didit:completed" || event.type === "didit:cancelled") {
+            settle("finished");
+          }
+        },
+        onIframeLoad: () => {}
+      });
+
+      SDKLogger.log("Launching required transaction action:", url);
+      this._actionModal.open(url);
+    });
   }
 
   private handleModalClose(): void {
