@@ -11,7 +11,8 @@ import type {
   StartVerificationOptions,
   SubmitTransactionOptions,
   SubmitTransactionResult,
-  TransactionActionCompletedCallback
+  TransactionActionCompletedCallback,
+  TransactionActionCompletedError
 } from "./types";
 
 import { VerificationModal } from "./modal";
@@ -51,6 +52,14 @@ export class DiditSdk {
   private _errorMessage: string | undefined;
   private _actionModal: VerificationModal | null = null;
   private _actionModalSettle: ((outcome: TransactionActionOutcome) => void) | null = null;
+  /**
+   * Bumped by destroy() to invalidate any transaction action in flight
+   * (pending action modal and/or its follow-up poll) so a torn-down SDK
+   * instance can never deliver a late onActionCompleted. A new
+   * submitTransaction call always reads the current generation, so it is
+   * unaffected by a destroy() that happened before it started.
+   */
+  private _actionGeneration = 0;
 
   public onComplete: VerificationCallback | undefined;
   public onStateChange: StateChangeCallback | undefined;
@@ -65,7 +74,17 @@ export class DiditSdk {
   }
 
   public get isPresented(): boolean {
-    return (this._modal?.isOpen() ?? false) || (this._actionModal?.isOpen() ?? false);
+    return this._modal?.isOpen() ?? false;
+  }
+
+  /**
+   * True while a transaction's required-action modal (biometric session or
+   * wallet-ownership widget, auto-launched by submitTransaction) is on
+   * screen. Tracked separately from {@link isPresented}, which reflects the
+   * verification modal only.
+   */
+  public get isActionModalPresented(): boolean {
+    return this._actionModal?.isOpen() ?? false;
   }
 
   public get errorMessage(): string | undefined {
@@ -170,17 +189,23 @@ export class DiditSdk {
     return result;
   }
 
+  /**
+   * Dismisses everything currently on screen in one deterministic call: a
+   * pending transaction action modal is treated as an abort (no follow-up
+   * poll, no onActionCompleted) and the verification modal is always closed
+   * afterwards, regardless of whether an action modal was present.
+   */
   public close(): void {
     SDKLogger.log("Closing verification programmatically");
-    if (this._actionModalSettle) {
-      this._actionModalSettle("finished");
-      return;
-    }
+    this._actionModalSettle?.("aborted");
     this.handleModalCloseConfirmed();
   }
 
   public destroy(): void {
     SDKLogger.log("Destroying SDK instance");
+    // Invalidate any transaction action in flight so a poll that is already
+    // running cannot deliver onActionCompleted after teardown.
+    this._actionGeneration++;
     this._actionModalSettle?.("aborted");
     this._modal?.destroy();
     this._modal = null;
@@ -193,25 +218,61 @@ export class DiditSdk {
     submitResult: SubmitTransactionResult,
     onActionCompleted: TransactionActionCompletedCallback | undefined
   ): Promise<void> {
+    const generation = this._actionGeneration;
+    let delivered = false;
+
+    // Guarantees at-most-once delivery: a throwing integrator callback must
+    // not be re-invoked by a surrounding catch, and a destroy() that
+    // happened while we were awaiting the modal/poll must suppress delivery
+    // entirely rather than calling back into a torn-down integration.
+    const deliver = (result: SubmitTransactionResult, error?: TransactionActionCompletedError): void => {
+      if (delivered || generation !== this._actionGeneration) return;
+      delivered = true;
+      try {
+        onActionCompleted?.(result, error);
+      } catch (callbackError) {
+        SDKLogger.error("onActionCompleted callback threw:", callbackError);
+      }
+    };
+
     try {
       const outcome = await this.presentTransactionActionModal(submitResult.actionRequired!.url);
-      if (outcome === "aborted") {
+      if (outcome === "aborted" || generation !== this._actionGeneration) {
         return;
       }
       if (!submitResult.transactionId) {
-        onActionCompleted?.(submitResult);
+        deliver(submitResult);
         return;
       }
-      const refreshed = await pollTransactionAfterAction({
-        baseUrl,
-        transactionToken,
-        transactionId: submitResult.transactionId,
-        initialStatus: submitResult.status
-      });
-      onActionCompleted?.(refreshed ?? submitResult);
+
+      let refreshed: SubmitTransactionResult | null = null;
+      let pollError: DiditTransactionError | undefined;
+      try {
+        refreshed = await pollTransactionAfterAction({
+          baseUrl,
+          transactionToken,
+          transactionId: submitResult.transactionId,
+          initialStatus: submitResult.status,
+          isAborted: () => generation !== this._actionGeneration
+        });
+      } catch (error) {
+        if (error instanceof DiditTransactionError) {
+          pollError = error;
+        } else {
+          throw error;
+        }
+      }
+
+      if (pollError) {
+        // Terminal auth failure (invalid_token/expired_token): surface it
+        // instead of silently handing back the stale pre-action result.
+        deliver(submitResult, { type: pollError.type, message: pollError.message });
+        return;
+      }
+      deliver(refreshed ?? submitResult);
     } catch (error) {
       SDKLogger.error("Transaction action follow-up failed:", error);
-      onActionCompleted?.(submitResult);
+      deliver(submitResult);
     }
   }
 
@@ -231,21 +292,37 @@ export class DiditSdk {
         resolve(outcome);
       };
 
-      this._actionModalSettle = settle;
-      this._actionModal = new VerificationModal(undefined, {
-        onClose: () => {},
-        onCloseConfirmed: () => settle("finished"),
-        onMessage: (event) => {
-          this.onEvent?.(event);
-          if (event.type === "didit:completed" || event.type === "didit:cancelled") {
-            settle("finished");
-          }
-        },
-        onIframeLoad: () => {}
-      });
+      // this._actionModalSettle is assigned only after the modal is
+      // successfully constructed and opened. If either throws (e.g. no
+      // `document` in Node/SSR, or document.body not ready yet), the
+      // settle callback must not be left dangling: a later close() would
+      // otherwise find a stale this._actionModalSettle for a modal that
+      // was never presented, "settle" it, and return early without ever
+      // closing the actual verification modal.
+      let modal: VerificationModal;
+      try {
+        modal = new VerificationModal(undefined, {
+          onClose: () => {},
+          onCloseConfirmed: () => settle("finished"),
+          onMessage: (event) => {
+            this.onEvent?.(event);
+            if (event.type === "didit:completed" || event.type === "didit:cancelled") {
+              settle("finished");
+            }
+          },
+          onIframeLoad: () => {}
+        });
 
-      SDKLogger.log("Launching required transaction action:", url);
-      this._actionModal.open(url);
+        SDKLogger.log("Launching required transaction action:", url);
+        modal.open(url);
+      } catch (error) {
+        this._actionModal = null;
+        this._actionModalSettle = null;
+        throw error;
+      }
+
+      this._actionModal = modal;
+      this._actionModalSettle = settle;
     });
   }
 
