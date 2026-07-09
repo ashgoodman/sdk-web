@@ -17,6 +17,14 @@ export interface ModalCallbacks {
 }
 
 export class VerificationModal {
+  /**
+   * Every currently-open modal, oldest first. Used so a single Escape
+   * keypress (or other document-level shortcut) only acts on the topmost
+   * modal when multiple VerificationModal instances are open at once (e.g.
+   * a transaction action modal stacked over the verification modal).
+   */
+  private static openModals: VerificationModal[] = [];
+
   private modalId: string;
   private config: Required<Pick<DiditSdkConfiguration, "zIndex" | "showCloseButton" | "showExitConfirmation">>;
   private callbacks: ModalCallbacks;
@@ -39,6 +47,9 @@ export class VerificationModal {
   private embedded: boolean = false;
   private embeddedContainer: HTMLElement | null = null;
   private language: string = "en";
+
+  /** body.style.overflow value observed right before this modal locked scroll, restored on close(). */
+  private previousBodyOverflow: string | null = null;
 
   constructor(configuration: DiditSdkConfiguration | undefined, callbacks: ModalCallbacks) {
     this.modalId = generateModalId();
@@ -394,6 +405,13 @@ export class VerificationModal {
   }
 
   private setupEventListeners(): void {
+    // Idempotent: open() calls this every time it presents the modal, but a
+    // modal that was already open (or re-opened without an intervening
+    // close()) must not accumulate duplicate listeners.
+    if (this.boundHandleMessage || this.boundHandleKeydown) {
+      return;
+    }
+
     this.boundHandleMessage = this.handleMessage.bind(this);
     window.addEventListener("message", this.boundHandleMessage);
 
@@ -412,10 +430,40 @@ export class VerificationModal {
     }
   }
 
+  private pushToTop(): void {
+    const modals = VerificationModal.openModals;
+    const existingIndex = modals.indexOf(this);
+    if (existingIndex !== -1) {
+      modals.splice(existingIndex, 1);
+    }
+    modals.push(this);
+  }
+
+  private removeFromStack(): void {
+    const modals = VerificationModal.openModals;
+    const existingIndex = modals.indexOf(this);
+    if (existingIndex !== -1) {
+      modals.splice(existingIndex, 1);
+    }
+  }
+
+  private isTopmost(): boolean {
+    const modals = VerificationModal.openModals;
+    return modals.length > 0 && modals[modals.length - 1] === this;
+  }
+
   private handleMessage(event: MessageEvent): void {
     if (!this.iframe?.src) return;
     if (!isAllowedOrigin(event.origin, this.iframe.src )) {
       return SDKLogger.warn("Received postMessage from unallowed origin:", event.origin);
+    }
+
+    // Scope every message to this modal's own iframe. Without this check, a
+    // second VerificationModal open at the same time (e.g. a transaction
+    // action modal stacked over the verification modal) would also react to
+    // postMessages meant for the other iframe.
+    if (!this.iframe || event.source !== this.iframe.contentWindow) {
+      return;
     }
 
     SDKLogger.log("Received postMessage:", event.data);
@@ -442,6 +490,12 @@ export class VerificationModal {
 
   private handleKeydown(event: KeyboardEvent): void {
     if (!this.state.isOpen) return;
+
+    // When multiple modals are open at once, only the topmost one should
+    // react to a keypress aimed at it (e.g. Escape closing a stacked
+    // transaction action modal must not also trigger the exit confirmation
+    // of the verification modal underneath it).
+    if (!this.isTopmost()) return;
 
     if (event.key === "Escape") {
       event.preventDefault();
@@ -490,8 +544,11 @@ export class VerificationModal {
 
     if (!this.overlay && !this.container) {
       this.createDOM();
-      this.setupEventListeners();
     }
+    // Re-attach listeners every open() (idempotent) since close() now tears
+    // them down; this lets the same instance be re-opened without a
+    // destroy()/re-create cycle.
+    this.setupEventListeners();
 
     SDKLogger.log("Opening with URL:", verificationUrl);
 
@@ -505,12 +562,18 @@ export class VerificationModal {
     }
 
     this.state.isOpen = true;
+    this.pushToTop();
 
     if (this.embedded) {
       return;
     }
 
     this.overlay?.classList.add("active");
+    // Capture whatever overflow value is currently in effect (which may
+    // already be "hidden" because another modal is open) so close() can
+    // restore exactly that value instead of clobbering a scroll lock owned
+    // by a concurrently open modal.
+    this.previousBodyOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
   }
 
@@ -520,6 +583,8 @@ export class VerificationModal {
     this.state.isOpen = false;
     this.state.isLoading = true;
     this.state.showConfirmation = false;
+    this.removeFromStack();
+    this.removeEventListeners();
 
     if (this.iframe) {
       this.iframe.src = "about:blank";
@@ -530,7 +595,8 @@ export class VerificationModal {
     }
 
     this.overlay?.classList.remove("active");
-    document.body.style.overflow = "";
+    document.body.style.overflow = this.previousBodyOverflow ?? "";
+    this.previousBodyOverflow = null;
   }
 
   destroy(): void {

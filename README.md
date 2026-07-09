@@ -6,6 +6,7 @@ A lightweight JavaScript/TypeScript SDK for embedding Didit identity verificatio
 
 - 🎯 **Simple API** - Singleton pattern with easy-to-use methods
 - 🔐 **Flexible Integration** - Use UniLink URL directly or create sessions via backend
+- 💸 **Transaction Submission** - Submit monitored transactions (incl. Travel Rule) with a scoped token, automatic device intelligence, and an auto-launched wallet-ownership flow
 - 📱 **Responsive** - Works on desktop and mobile browsers
 - 🎨 **Customizable** - Configuration options for styling and behavior
 - 📦 **Multiple Formats** - ESM, CommonJS, and UMD builds
@@ -269,6 +270,66 @@ console.log(DiditSdk.shared.state);
 console.log(DiditSdk.shared.isPresented);
 ```
 
+## Transaction Submission
+
+Submit [monitored transactions](https://docs.didit.me/transaction-monitoring/sdk-transaction-submission) — including [Travel Rule](https://docs.didit.me/transaction-monitoring/travel-rule) transfers and crypto screening — straight from the browser. Your backend mints a short-lived scoped token with `POST /v3/transactions/sdk-token/`; the SDK does the rest: it binds the subject to the token server-side, attaches device intelligence automatically, and auto-launches the wallet-ownership flow when the transaction requires proof of wallet control.
+
+```typescript
+import { DiditSdk, DiditTransactionError } from "@didit-protocol/sdk-web";
+
+try {
+  const result = await DiditSdk.shared.submitTransaction({
+    transactionToken: sdkToken, // minted by YOUR backend - never ship an API key
+    transaction: {
+      txnId: "wd-2026-07-07-0042",
+      category: "travelRule",
+      details: {
+        direction: "out",
+        amount: "0.25",
+        currency: "ETH",
+        currencyType: "crypto",
+        cryptoParams: { crypto_chain: "ETH" },
+      },
+      subject: { type: "individual", fullName: "Jane Doe" },
+      counterparty: {
+        type: "individual",
+        fullName: "Ana Diaz",
+        paymentMethod: { type: "unhosted_wallet", accountId: "0xBeneficiaryWallet01" },
+      },
+      travelRule: {
+        beneficiaryData: { wallet_address: "0xBeneficiaryWallet01", name: "Ana Diaz" },
+      },
+      includeCryptoScreening: true,
+    },
+    autoLaunchAction: true, // default - auto-launches wallet_ownership in the SDK modal
+    onActionCompleted: (refreshed) => {
+      console.log(refreshed.status, refreshed.travelRuleStatus);
+    },
+  });
+
+  console.log(result.transactionId, result.status);
+
+  // verification_session actions are NEVER auto-launched - start them yourself:
+  if (result.actionRequired?.type === "verification_session") {
+    DiditSdk.shared.startVerification({ url: result.actionRequired.url });
+  }
+} catch (error) {
+  if (error instanceof DiditTransactionError) {
+    // error.type: "expired_token" | "invalid_token" | "validation" | "network"
+    // error.fieldErrors carries per-field details for validation errors
+  }
+}
+```
+
+Key points:
+
+- **`transactionToken`** — scoped to one user (`vendor_data`) at mint time; the subject identity is enforced server-side from it, so a tampered client cannot submit for another user.
+- **`autoLaunchAction`** (default `true`) — auto-launches only `wallet_ownership` actions (in the SDK's overlay modal); a `verification_session` action always comes back in `result.actionRequired` for your app to launch with `startVerification`.
+- **Device intelligence** — a privacy-safe fingerprint is attached to every submission automatically; IP and user agent are derived server-side.
+- **`onActionCompleted`** — receives the refreshed transaction after an auto-launched flow completes or its window closes.
+
+Full guide: [SDK Transaction Submission](https://docs.didit.me/transaction-monitoring/sdk-transaction-submission).
+
 ## API Reference
 
 ### DiditSdk.shared
@@ -280,6 +341,7 @@ The singleton SDK instance.
 | Method | Description |
 |--------|-------------|
 | `startVerification(options)` | Start the verification flow |
+| `submitTransaction(options)` | Submit a monitored transaction with a scoped token ([guide](https://docs.didit.me/transaction-monitoring/sdk-transaction-submission)) |
 | `close()` | Programmatically close the verification modal |
 | `destroy()` | Destroy the SDK instance and clean up |
 
