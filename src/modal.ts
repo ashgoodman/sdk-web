@@ -540,6 +540,12 @@ export class VerificationModal {
   }
 
   open(verificationUrl: string): void {
+    // Whether this modal already held its scroll lock before this call. Re-opening
+    // an already-open instance must not re-capture previousBodyOverflow, or it
+    // would record this modal's own "hidden" lock and close() could never restore
+    // the real pre-lock value.
+    const wasAlreadyOpen = this.state.isOpen;
+
     this.language = detectLanguageFromUrl(verificationUrl);
 
     if (!this.overlay && !this.container) {
@@ -572,8 +578,12 @@ export class VerificationModal {
     // Capture whatever overflow value is currently in effect (which may
     // already be "hidden" because another modal is open) so close() can
     // restore exactly that value instead of clobbering a scroll lock owned
-    // by a concurrently open modal.
-    this.previousBodyOverflow = document.body.style.overflow;
+    // by a concurrently open modal. Skip the capture on a re-open: the value
+    // in effect is this modal's own lock, and previousBodyOverflow already
+    // holds the correct pre-lock value.
+    if (!wasAlreadyOpen) {
+      this.previousBodyOverflow = document.body.style.overflow;
+    }
     document.body.style.overflow = "hidden";
   }
 
