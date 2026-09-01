@@ -2,6 +2,21 @@
 
 All notable changes to `@didit-protocol/sdk-web` will be documented in this file.
 
+## [0.3.0] - 2026-09-01
+
+### Added
+- `submitTransaction()` for browser-side transaction monitoring submissions using scoped transaction tokens.
+- Automatic device intelligence collection for transaction submissions.
+- Wallet ownership action flows with bounded post-action polling and completion callbacks.
+- Bosnian (`bs`), Kazakh (`kk`), Kyrgyz (`ky`), and Albanian (`sq`) modal translations.
+
+### Fixed
+- Isolate events, keyboard handling, and body scroll locking when multiple SDK modals are open.
+- Restore body scrolling after an already-open modal is opened again and then closed.
+- Abort transaction polling during teardown and on terminal authentication errors.
+- Preserve the verification-only contract of `isPresented` and expose action modal state separately.
+- Reject malformed transaction responses instead of returning fabricated empty identifiers or statuses.
+
 ## [0.2.1] - 2026-05-21
 
 ### Added

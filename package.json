@@ -1,6 +1,6 @@
 {
   "name": "@didit-protocol/sdk-web",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Didit Identity Verification SDK for Web Applications",
   "main": "dist/didit-sdk.cjs.js",
   "module": "dist/didit-sdk.esm.js",
@@ -38,7 +38,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/didit-protocol/sdk-web.git"
+    "url": "git+https://github.com/didit-protocol/sdk-web.git"
   },
   "homepage": "https://docs.didit.me",
   "devDependencies": {
