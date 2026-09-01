@@ -41,6 +41,10 @@
     "url": "git+https://github.com/didit-protocol/sdk-web.git"
   },
   "homepage": "https://docs.didit.me",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.2.3",
     "@rollup/plugin-typescript": "^11.1.6",
