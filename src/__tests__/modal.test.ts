@@ -117,6 +117,24 @@ describe("VerificationModal cross-modal isolation", () => {
     expect(document.body.style.overflow).toBe("");
   });
 
+  it("restores the pre-lock body overflow after re-opening an already-open modal", () => {
+    document.body.style.overflow = "scroll";
+    const a = createModal();
+    openModals.push(a.modal);
+
+    a.modal.open("https://verify.didit.me/session/a");
+    expect(document.body.style.overflow).toBe("hidden");
+
+    // Re-open the same instance while it is still open (supported: open()
+    // dedupes itself in the stack). This must not overwrite the saved pre-lock
+    // overflow with the lock this modal already applied.
+    a.modal.open("https://verify.didit.me/session/a-2");
+    expect(document.body.style.overflow).toBe("hidden");
+
+    a.modal.close();
+    expect(document.body.style.overflow).toBe("scroll");
+  });
+
   it("falls back to Escape acting on the remaining modal once the topmost one closes", () => {
     const a = createModal();
     const b = createModal();
