@@ -41,6 +41,14 @@ const translationsMap: Record<string, ModalTranslations> = {
     ariaLabelModal: "Didit যাচাইকরণ",
     ariaLabelClose: "যাচাইকরণ বন্ধ করুন"
   },
+  bs: {
+    exitTitle: "Izaći iz verifikacije?",
+    exitMessage: "Izlaskom ćete prekinuti proces verifikacije. Jeste li sigurni?",
+    continueButton: "Nastavi",
+    exitButton: "Izađi",
+    ariaLabelModal: "Didit verifikacija",
+    ariaLabelClose: "Zatvori verifikaciju"
+  },
   ca: {
     exitTitle: "Sortir de la verificació?",
     exitMessage: "Sortir finalitzarà el procés de verificació. N'esteu segur?",
@@ -202,6 +210,14 @@ const translationsMap: Record<string, ModalTranslations> = {
     ariaLabelModal: "Didit შემოწმება",
     ariaLabelClose: "შემოწმების დახურვა"
   },
+  kk: {
+    exitTitle: "Растаудан шығасыз ба?",
+    exitMessage: "Шығу растау процесін аяқтайды. Сенімдісіз бе?",
+    continueButton: "Жалғастыру",
+    exitButton: "Шығу",
+    ariaLabelModal: "Didit растауы",
+    ariaLabelClose: "Растауды жабу"
+  },
   ko: {
     exitTitle: "인증을 종료하시겠습니까?",
     exitMessage: "종료하면 인증 절차가 중단됩니다. 확실하십니까?",
@@ -209,6 +225,14 @@ const translationsMap: Record<string, ModalTranslations> = {
     exitButton: "종료",
     ariaLabelModal: "Didit 인증",
     ariaLabelClose: "인증 닫기"
+  },
+  ky: {
+    exitTitle: "Текшерүүдөн чыгасызбы?",
+    exitMessage: "Чыгуу текшерүү процессин токтотот. Ишенесизби?",
+    continueButton: "Улантуу",
+    exitButton: "Чыгуу",
+    ariaLabelModal: "Didit текшерүүсү",
+    ariaLabelClose: "Текшерүүнү жабуу"
   },
   lt: {
     exitTitle: "Išeiti iš patvirtinimo?",
@@ -329,6 +353,14 @@ const translationsMap: Record<string, ModalTranslations> = {
     exitButton: "Ka bax",
     ariaLabelModal: "Xaqiijinta Didit",
     ariaLabelClose: "Xir xaqiijinta"
+  },
+  sq: {
+    exitTitle: "Dilni nga verifikimi?",
+    exitMessage: "Dalja do të përfundojë procesin tuaj të verifikimit. A jeni të sigurt?",
+    continueButton: "Vazhdo",
+    exitButton: "Dil",
+    ariaLabelModal: "Verifikimi Didit",
+    ariaLabelClose: "Mbyll verifikimin"
   },
   sr: {
     exitTitle: "Изаћи из верификације?",
