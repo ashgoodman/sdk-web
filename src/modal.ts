@@ -110,6 +110,7 @@ export class VerificationModal {
       .${CSS_CLASSES.iframe} {
         width: 100%;
         height: 700px;
+        height: min(700px, 90dvh);
         border: none;
         display: block;
       }
